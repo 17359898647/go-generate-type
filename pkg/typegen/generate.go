@@ -24,6 +24,7 @@ type Options struct {
 	PkgDir         string
 	IncludePattern string
 	IncludeType    string
+	TypeNameMapper func(typeName string, moduleName string) string
 }
 
 type OutputOptions struct {
@@ -72,6 +73,11 @@ func GenerateTypesWithOptions(opts Options) (string, error) {
 	interfaceTypes, err := collectInterfaceTypeNames(pkgDir, pkgImportPath)
 	if err != nil {
 		return "", fmt.Errorf("collect interface types: %w", err)
+	}
+
+	renameMap, err := collectStructRenameMap(pkgDir, pkgImportPath, opts.TypeNameMapper)
+	if err != nil {
+		return "", fmt.Errorf("collect struct rename map: %w", err)
 	}
 
 	// 使用单一 parser 处理所有包，确保跨包引用正确解析
@@ -130,6 +136,9 @@ func GenerateTypesWithOptions(opts Options) (string, error) {
 	}
 
 	output = filterInterfaceTypes(output, interfaceTypes)
+	if len(renameMap) > 0 {
+		output = renameIdentifiers(output, renameMap)
+	}
 	output = deduplicateTypes(output)
 
 	return output, nil
@@ -323,6 +332,112 @@ func collectInterfaceTypeNames(pkgDir, pkgImportPath string) (map[string]struct{
 	return interfaces, nil
 }
 
+func collectStructRenameMap(pkgDir, pkgImportPath string, mapper func(typeName, moduleName string) string) (map[string]string, error) {
+	if mapper == nil {
+		return nil, nil
+	}
+
+	renames := make(map[string]string)
+	seenNew := make(map[string]string)
+	fset := token.NewFileSet()
+
+	err := filepath.WalkDir(pkgDir, func(dir string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+
+		name := entry.Name()
+		if dir != pkgDir && (name == "typegen" || strings.HasPrefix(name, ".")) {
+			return filepath.SkipDir
+		}
+
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+
+		var goFiles []string
+		for _, file := range entries {
+			if file.IsDir() {
+				continue
+			}
+			fileName := file.Name()
+			if strings.HasSuffix(fileName, ".go") && !strings.HasSuffix(fileName, "_test.go") {
+				goFiles = append(goFiles, filepath.Join(dir, fileName))
+			}
+		}
+		if len(goFiles) == 0 {
+			return nil
+		}
+
+		rel, err := filepath.Rel(pkgDir, dir)
+		if err != nil {
+			return err
+		}
+
+		importPath := pkgImportPath
+		moduleName := path.Base(pkgImportPath)
+		if rel != "." {
+			importPath = path.Join(pkgImportPath, filepath.ToSlash(rel))
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			if len(parts) > 0 {
+				moduleName = parts[0]
+			}
+		}
+		prefix := prefixForImportPath(pkgImportPath, importPath)
+
+		for _, filePath := range goFiles {
+			parsed, err := parser.ParseFile(fset, filePath, nil, parser.SkipObjectResolution)
+			if err != nil {
+				return fmt.Errorf("parse file %s: %w", filePath, err)
+			}
+
+			for _, decl := range parsed.Decls {
+				genDecl, ok := decl.(*ast.GenDecl)
+				if !ok || genDecl.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range genDecl.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					if _, ok := typeSpec.Type.(*ast.StructType); !ok {
+						continue
+					}
+					name := typeSpec.Name.Name
+					if name == "" || !ast.IsExported(name) {
+						continue
+					}
+					newName := mapper(name, moduleName)
+					if newName == "" {
+						continue
+					}
+					oldName := prefix + name
+					if newName == oldName {
+						continue
+					}
+					if existing, ok := seenNew[newName]; ok && existing != oldName {
+						return fmt.Errorf("type name mapper collision: %s and %s -> %s", existing, oldName, newName)
+					}
+					seenNew[newName] = oldName
+					renames[oldName] = newName
+				}
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk pkg dir: %w", err)
+	}
+
+	return renames, nil
+}
+
 func filterByWhitelist(content string, fileRegexp, typeRegexp *regexp.Regexp) string {
 	if fileRegexp == nil && typeRegexp == nil {
 		return content
@@ -510,6 +625,20 @@ func filterInterfaceTypes(content string, excluded map[string]struct{}) string {
 	}
 
 	return strings.Join(result, "\n")
+}
+
+func renameIdentifiers(content string, rename map[string]string) string {
+	if len(rename) == 0 {
+		return content
+	}
+
+	re := regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\b`)
+	return re.ReplaceAllStringFunc(content, func(token string) string {
+		if replacement, ok := rename[token]; ok {
+			return replacement
+		}
+		return token
+	})
 }
 
 // deduplicateTypes removes duplicate type definitions (keep first occurrence)

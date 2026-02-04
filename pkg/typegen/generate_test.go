@@ -103,6 +103,58 @@ func TestGenerateTypes_RequiresPkgDir(t *testing.T) {
 	}
 }
 
+func TestGenerateTypes_TypeNameMapper(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module example.com/test\n\ngo 1.25.0\n")
+
+	writeFile(t, root, "pkg/foo/dto.go", `package foo
+
+type FooReq struct {
+	Bar Bar
+}
+`)
+	writeFile(t, root, "pkg/foo/bar.go", `package foo
+
+type Bar struct {
+	Name string
+}
+`)
+
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prev)
+	}()
+
+	t.Setenv("GOMOD", filepath.Join(root, "go.mod"))
+	t.Setenv("GOWORK", "off")
+
+	output, err := GenerateTypesWithOptions(Options{
+		PkgDir: filepath.Join(root, "pkg"),
+		TypeNameMapper: func(typeName, moduleName string) string {
+			return "X" + typeName
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateTypesWithOptions: %v", err)
+	}
+
+	if !strings.Contains(output, "XFooReq") {
+		t.Fatalf("expected renamed FooReq to be generated")
+	}
+	if !strings.Contains(output, "XBar") {
+		t.Fatalf("expected renamed Bar to be generated")
+	}
+	if strings.Contains(output, "foo_FooReq") || strings.Contains(output, "foo_Bar") {
+		t.Fatalf("did not expect original prefixed names to remain")
+	}
+}
+
 func writeFile(t *testing.T, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, rel)
