@@ -4,7 +4,7 @@ import (
 	"flag"
 	"log"
 
-	"github.com/ggg/go-generate-type/pkg/typegen"
+	"github.com/GGGLHHH/go-generate-type/pkg/typegen"
 )
 
 func main() {

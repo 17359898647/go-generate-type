@@ -1,4 +1,4 @@
-module github.com/ggg/go-generate-type
+module github.com/GGGLHHH/go-generate-type
 
 go 1.25.0
 

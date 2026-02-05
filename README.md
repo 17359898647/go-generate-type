@@ -5,7 +5,7 @@ Generate TypeScript types from Go structs using [coder/guts](https://github.com/
 ## Install
 
 ```bash
-go install github.com/ggg/go-generate-type/cmd/typegen@latest
+go install github.com/GGGLHHH/go-generate-type/cmd/typegen@latest
 ```
 
 ## Usage
@@ -43,7 +43,7 @@ package main
 import (
     "log"
 
-    "github.com/ggg/go-generate-type/pkg/typegen"
+    "github.com/GGGLHHH/go-generate-type/pkg/typegen"
 )
 
 func main() {
